@@ -55,6 +55,7 @@ function wrapper(plugin_info) {
 
 
         var setup =  function() {
+            console.log('Send Portals Setup Start')
             $('#toolbox').append('<a onclick="window.plugin.sendportal.panel()" title="Send portals to external database" accesskey="h">Send Portals</a>');
         }
 
@@ -68,6 +69,7 @@ function wrapper(plugin_info) {
         if(window.iitcLoaded && typeof setup === 'function') setup();
     } // wrapper end
 // inject code into site context
+    console.log('Send Portals Start')
     var script = document.createElement('script');
     var info = {};
     if (typeof GM_info !== 'undefined' && GM_info && GM_info.script) info.script = { version: GM_info.script.version, name: GM_info.script.name, description: GM_info.script.description };
