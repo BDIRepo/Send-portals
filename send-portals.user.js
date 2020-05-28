@@ -2,7 +2,7 @@
 // @id             iitc-plugin-Send-portals
 // @name           IITC plugin: Send portals
 // @category       Info
-// @version        0.1.6
+// @version        0.1.7
 // @namespace      X
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-portals.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-portals.user.js
@@ -51,13 +51,13 @@ function wrapper(plugin_info) {
         window.plugin.sendportal.panel.getBounds = function () {
             map.getBounds()
         }
-
+    }
 
         var setup = function () {
             console.log('Send Portals Setup Start')
             $('#toolbox').append('<a onclick="window.plugin.sendportal.panel()" title="Send portals to external database" accesskey="h">Send Portals</a>');
         }
-    }
+
 // PLUGIN END //////////////////////////////////////////////////////////
 
 
