@@ -2,7 +2,7 @@
 // @id             iitc-plugin-Send-portals
 // @name           IITC plugin: Send portals
 // @category       Info
-// @version        0.1.5
+// @version        0.1.6
 // @namespace      X
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-portals.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-portals.user.js
@@ -42,23 +42,22 @@ function wrapper(plugin_info) {
         var counts = window.PLAYER.nickname
         var title = 'Send Portals'
 
-            dialog({
+        dialog({
             html: '<div id="main">' + counts + '</div>',
             title: title,
             width: 'auto'
         });
 
-        window.plugin.sendportal.panel.getBounds = function(){
+        window.plugin.sendportal.panel.getBounds = function () {
             map.getBounds()
         }
 
 
-
-        var setup =  function() {
+        var setup = function () {
             console.log('Send Portals Setup Start')
             $('#toolbox').append('<a onclick="window.plugin.sendportal.panel()" title="Send portals to external database" accesskey="h">Send Portals</a>');
         }
-
+    }
 // PLUGIN END //////////////////////////////////////////////////////////
 
 
@@ -69,7 +68,6 @@ function wrapper(plugin_info) {
         if(window.iitcLoaded && typeof setup === 'function') setup();
     } // wrapper end
 // inject code into site context
-    console.log('Send Portals Start')
     var script = document.createElement('script');
     var info = {};
     if (typeof GM_info !== 'undefined' && GM_info && GM_info.script) info.script = { version: GM_info.script.version, name: GM_info.script.name, description: GM_info.script.description };
