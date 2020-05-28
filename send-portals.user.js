@@ -2,7 +2,7 @@
 // @id             iitc-plugin-Send-portals
 // @name           IITC plugin: Send portals
 // @category       Info
-// @version        0.1.4
+// @version        0.1.5
 // @namespace      X
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-portals.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-portals.user.js
@@ -75,4 +75,3 @@ function wrapper(plugin_info) {
     if (typeof GM_info !== 'undefined' && GM_info && GM_info.script) info.script = { version: GM_info.script.version, name: GM_info.script.name, description: GM_info.script.description };
     script.appendChild(document.createTextNode('('+ wrapper +')('+JSON.stringify(info)+');'));
     (document.body || document.head || document.documentElement).appendChild(script);
-}
