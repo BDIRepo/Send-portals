@@ -4,8 +4,8 @@
 // @category       Info
 // @version        0.1.2
 // @namespace      X
-// @updateURL      https://github.com/BDIRepo/Send-portals/blob/master/send-portals.meta.js
-// @downloadURL    https://github.com/BDIRepo/Send-portals/blob/master/send-portals.user.js
+// @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-portals.meta.js
+// @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-portals.user.js
 // @description    Send portals to external database.
 // @include        https://*.ingress.com/intel*
 // @include        http://*.ingress.com/intel*
