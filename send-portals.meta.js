@@ -2,7 +2,7 @@
 // @id             iitc-plugin-Send-portals
 // @name           IITC plugin: Send portals
 // @category       Info
-// @version        0.1.1
+// @version        0.1.2
 // @namespace      X
 // @updateURL      https://github.com/BDIRepo/Send-portals/blob/master/send-portals.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/blob/master/send-portals.user.js
