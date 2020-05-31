@@ -2,7 +2,7 @@
 // @id             iitc-plugin-Send-portals
 // @name           IITC plugin: Send portals
 // @category       Info
-// @version        0.1.7
+// @version        0.1.8
 // @namespace      X
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-portals.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-portals.user.js
@@ -39,11 +39,19 @@ function wrapper(plugin_info) {
 
     window.plugin.sendportal.panel = function() {
         //var content = '<div id="main">'
-        var counts = window.PLAYER.nickname
+        var nick = window.PLAYER.nickname
+        var portalcount = Object.keys(portals).length;
         var title = 'Send Portals'
 
         dialog({
-            html: '<div id="main">' + counts + '</div>',
+            html: '<div id="main">' +
+                '<p id="hello">Cześć '+nick+', Zaczynamy?</p>' +
+                '<button id="start">Start</button>' +
+                '<p id="portal count">Znalazłem '+ portalcount+' portali</p>' +
+                '<p id="Send_ok" hidden="true">Wysłano poprawnie!</p>' +
+                '<p id="Send_error">Błąd wysyłania!</p>' +
+                '<p id="">Błąd wysyłania!</p>' +
+                '</div>',
             title: title,
             width: 'auto'
         });
