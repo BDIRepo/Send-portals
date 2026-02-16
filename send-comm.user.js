@@ -1,23 +1,15 @@
 // ==UserScript==
-// @id             iitc-plugin-Send-comm
-// @name           IITC plugin: Send comm
+// @id             iitc-plugin-send-comm-local
+// @name           IITC plugin: Send COMM to local API (raw)
 // @category       Info
-// @version        0.1.1
-// @namespace      X
-// @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-comm.meta.js
-// @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-comm.user.js
-// @description    Send comm to external database.
-// @include        https://*.ingress.com/intel*
-// @include        http://*.ingress.com/intel*
-// @match          https://*.ingress.com/intel*
-// @match          http://*.ingress.com/intel*
-// @include        https://*.ingress.com/mission/*
-// @include        http://*.ingress.com/mission/*
-// @match          https://*.ingress.com/mission/*
-// @match          http://*.ingress.com/mission/*
-// @grant          none
+// @version        0.2.0
+// @description    Send ALL COMM raw events ([guid, ts_ms, {plext}]) to local FastAPI via GM_xmlhttpRequest
+// @match          https://intel.ingress.com/*
+// @grant          GM_xmlhttpRequest
+// @grant          unsafeWindow
+// @connect        127.0.0.1
+// @connect        localhost
 // ==/UserScript==
-
 
 (() => {
     'use strict';
@@ -26,25 +18,26 @@
     // LOCAL CONFIG
     // =========================
     const API_URL = 'http://127.0.0.1:8000/ingress/comm/batch-raw';
-    const API_TOKEN = 'CHANGE_ME_LONG_RANDOM_TOKEN'; // musi być zgodne z API_TOKEN po stronie serwera
+    const API_TOKEN = 'CHANGE_ME_LONG_RANDOM_TOKEN';
 
     const BATCH_SIZE = 100;
     const FLUSH_INTERVAL_MS = 3000;
 
-    // Ochrona localStorage
     const MAX_QUEUE = 5000;
     const MAX_SEEN = 10000;
 
-    // Backoff gdy serwer nie działa
     const BACKOFF_MIN_MS = 3000;
     const BACKOFF_MAX_MS = 60000;
 
     // =========================
-    // STORAGE
+    // STORAGE KEYS
     // =========================
     const LS_QUEUE = 'iitc_comm_exporter_queue_local_v3';
-    const LS_SEEN = 'iitc_comm_exporter_seen_local_v3';
+    const LS_SEEN  = 'iitc_comm_exporter_seen_local_v3';
 
+    // =========================
+    // HELPERS: localStorage
+    // =========================
     const loadLS = (key, fallback) => {
         try {
             const v = localStorage.getItem(key);
@@ -59,7 +52,7 @@
         try {
             localStorage.setItem(key, JSON.stringify(value));
         } catch {
-            // jeśli localStorage pełny - i tak tniemy kolejkę limitami
+            // ignore
         }
     };
 
@@ -85,10 +78,10 @@
     };
 
     // =========================
-    // NORMALIZE to [guid, ts_ms, {plext:{...}}]
+    // NORMALIZE: [guid, ts_ms, {plext:{...}}]
     // =========================
     function normalizeToRawTriple(item) {
-        // najczęstsze: już jest [guid, ts_ms, {plext:...}]
+        // already raw triple
         if (Array.isArray(item) && item.length === 3) {
             const [guid, ts, payload] = item;
             if (
@@ -97,12 +90,11 @@
                 payload && typeof payload === 'object' &&
                 payload.plext && typeof payload.plext === 'object'
             ) {
-                // ts w IITC jest zwykle ms (number). Zostawiamy jak jest.
                 return [guid, ts, payload];
             }
         }
 
-        // wariant obiektowy (zależny od wersji IITC)
+        // object form (depends on IITC build)
         if (item && typeof item === 'object') {
             const guid = item.guid || item.id;
             const ts = item.time || item.timestamp || item.ts;
@@ -133,7 +125,6 @@
 
             const guid = raw[0];
             if (!guid) continue;
-
             if (seenHas(guid)) continue;
 
             queue.push(raw);
@@ -144,7 +135,7 @@
     }
 
     // =========================
-    // SEND
+    // SEND via GM_xmlhttpRequest
     // =========================
     function postBatchRaw(batch, onOk, onErr) {
         const payload = {
@@ -178,8 +169,8 @@
     function flushQueue() {
         const now = Date.now();
         if (now < nextAllowedSendAt) return;
-
         if (isFlushing) return;
+
         const queue = getQueue();
         if (!queue.length) return;
 
@@ -190,19 +181,15 @@
         postBatchRaw(
             batch,
             () => {
-                // sukces -> zdejmujemy wysłane
                 const rest = queue.slice(batch.length);
                 setQueue(rest);
 
-                // reset backoff
                 backoffMs = BACKOFF_MIN_MS;
                 nextAllowedSendAt = 0;
-
                 isFlushing = false;
             },
             (err) => {
-                // błąd -> zostawiamy w kolejce; zwiększamy odstęp prób
-                console.warn('[IITC COMM exporter local] send failed:', err);
+                console.warn('[Send-COMM] send failed:', err);
 
                 nextAllowedSendAt = Date.now() + backoffMs;
                 backoffMs = Math.min(backoffMs * 2, BACKOFF_MAX_MS);
@@ -213,14 +200,12 @@
     }
 
     // =========================
-    // IITC HOOKS (ALL COMM)
+    // IITC HOOKS
     // =========================
     function handleChatHook(data) {
         const candidates = [];
-
         if (!data) return;
 
-        // różne kształty w zależności od hooka
         if (Array.isArray(data)) candidates.push(...data);
         if (data.raw && Array.isArray(data.raw)) candidates.push(...data.raw);
         if (data.result && Array.isArray(data.result)) candidates.push(...data.result);
@@ -229,12 +214,15 @@
     }
 
     function setup() {
-        if (!window.addHook) {
-            console.warn('[IITC COMM exporter local] addHook not available');
+        const w = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+
+        if (!w.addHook) {
+            console.warn('[Send-COMM] IITC addHook not available yet');
             return;
         }
-        console.log("IITC COMM EXPORTER STARTED");
-        // bierzemy wszystko:
+
+        console.log('[Send-COMM] STARTED. API:', API_URL);
+
         const hooks = [
             'publicChatDataAvailable',
             'factionChatDataAvailable',
@@ -242,22 +230,30 @@
             'chatDataAvailable'
         ];
 
-        hooks.forEach((h) => window.addHook(h, handleChatHook));
+        hooks.forEach((h) => w.addHook(h, handleChatHook));
 
         setInterval(flushQueue, FLUSH_INTERVAL_MS);
 
-        console.log('[IITC COMM exporter local] loaded. API:', API_URL, 'hooks:', hooks.join(', '));
+        console.log('[Send-COMM] hooks attached:', hooks.join(', '));
     }
 
-    // =========================
-    // IITC WRAPPER
-    // =========================
-    function wrapper() {
-        if (window.iitcLoaded) setup();
-        else window.addHook('iitcLoaded', setup);
-    }
+    // czekamy na iitcLoaded w kontekście IITC
+    (function bootstrap() {
+        const w = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
 
-    const script = document.createElement('script');
-    script.appendChild(document.createTextNode('(' + wrapper + ')();'));
-    (document.body || document.head || document.documentElement).appendChild(script);
+        if (w.iitcLoaded) {
+            setup();
+            return;
+        }
+
+        // jeśli IITC jeszcze się ładuje, podepnij się do hooka iitcLoaded
+        if (w.addHook) {
+            w.addHook('iitcLoaded', setup);
+            return;
+        }
+
+        // fallback: spróbuj za chwilę
+        setTimeout(bootstrap, 1000);
+    })();
+
 })();
