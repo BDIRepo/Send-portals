@@ -33,7 +33,7 @@ function wrapper(plugin_info) {
 
 
 // PLUGIN START ///////////////w/////////////////////////////////////////
-
+    console.log("IITC COMM EXPORTER STARTED");
 // use own namespace for plugin
     window.plugin.sendportal = {};
 
