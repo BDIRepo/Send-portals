@@ -2,11 +2,11 @@
 // @id             iitc-plugin-Send-comm
 // @name           IITC plugin: Send comm
 // @category       Info
-// @version        0.1.0
+// @version        0.1.1
 // @namespace      X
-// @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-portals.meta.js
-// @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-portals.user.js
-// @description    Send portals to external database.
+// @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-comm.meta.js
+// @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-comm.user.js
+// @description    Send comm to external database.
 // @include        https://*.ingress.com/intel*
 // @include        http://*.ingress.com/intel*
 // @match          https://*.ingress.com/intel*
@@ -18,16 +18,6 @@
 // @grant          none
 // ==/UserScript==
 
-// ==UserScript==
-// @name         IITC COMM -> Local API exporter (raw)
-// @namespace    iitc-comm-exporter-local
-// @version      0.3.0
-// @description  Collect ALL COMM entries and send raw [guid, ts_ms, {plext}] batches to local FastAPI
-// @match        https://intel.ingress.com/*
-// @grant        GM_xmlhttpRequest
-// @connect      127.0.0.1
-// @connect      localhost
-// ==/UserScript==
 
 (() => {
     'use strict';
@@ -243,7 +233,7 @@
             console.warn('[IITC COMM exporter local] addHook not available');
             return;
         }
-
+        console.log("IITC COMM EXPORTER STARTED");
         // bierzemy wszystko:
         const hooks = [
             'publicChatDataAvailable',
