@@ -36,7 +36,7 @@ function wrapper(plugin_info) {
 
 // use own namespace for plugin
     window.plugin.sendportal = {};
-    
+
     window.plugin.sendportal.getPortals = function() {
 
         var displayBounds = map.getBounds();
