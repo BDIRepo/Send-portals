@@ -17,7 +17,7 @@
     // =========================
     // LOCAL CONFIG
     // =========================
-    const API_URL = 'http://127.0.0.1:8000/ingress/comm/batch-raw';
+    const API_URL = 'http://srv42.mikr.us:20214/gamestat/ingress/comm/batch-raw';
     const API_TOKEN = 'CHANGE_ME_LONG_RANDOM_TOKEN';
 
     const BATCH_SIZE = 100;
