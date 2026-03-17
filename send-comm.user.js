@@ -185,6 +185,20 @@
                         }
                         if (responseData.rejected > 0) {
                             console.warn(`[Send-COMM] ✗ Rejected: ${responseData.rejected} events`);
+
+                            // Szczegóły odrzuconych zdarzeń
+                            if (responseData.rejected_by_reason) {
+                                const reasons = [];
+                                for (const [reason, count] of Object.entries(responseData.rejected_by_reason)) {
+                                    if (count > 0) {
+                                        reasons.push(`${reason}: ${count}`);
+                                    }
+                                }
+                                if (reasons.length > 0) {
+                                    console.warn('[Send-COMM] Rejection reasons:');
+                                    reasons.forEach(r => console.warn(`  - ${r}`));
+                                }
+                            }
                         }
                         console.log(`[Send-COMM] Summary: ${responseData.accepted}/${batch.length} accepted`);
                     } catch (e) {
