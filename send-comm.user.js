@@ -4,12 +4,11 @@
 // @category       Info
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-comm.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-comm.user.js
-// @version        0.2.5
+// @version        0.2.6
 // @description    Send ALL COMM raw events ([guid, ts_ms, {plext}]) to local FastAPI via GM_xmlhttpRequest
 // @match          https://intel.ingress.com/*
 // @grant          GM_xmlhttpRequest
 // @grant          unsafeWindow
-// @connect        srv42.mikr.us:20214
 // @connect        srv42.mikr.us
 // ==/UserScript==
 
@@ -120,6 +119,7 @@
         if (!candidates || !candidates.length) return;
 
         const queue = getQueue();
+        let newCount = 0;
 
         for (const cand of candidates) {
             const raw = normalizeToRawTriple(cand);
@@ -131,9 +131,14 @@
 
             queue.push(raw);
             seenAdd(guid);
+            newCount++;
         }
 
         setQueue(queue);
+
+        if (newCount > 0) {
+            console.log(`[Send-COMM] Enqueued ${newCount} new events. Queue size: ${queue.length}`);
+        }
     }
 
     // =========================
@@ -146,6 +151,8 @@
             result: batch
         };
 
+        console.log(`[Send-COMM] Sending batch of ${batch.length} events to ${API_URL}`);
+
         GM_xmlhttpRequest({
             method: 'POST',
             url: API_URL,
@@ -156,11 +163,22 @@
             },
             timeout: 15000,
             onload: (resp) => {
-                if (resp.status >= 200 && resp.status < 300) onOk(resp);
-                else onErr(new Error(`HTTP ${resp.status}: ${resp.responseText}`));
+                if (resp.status >= 200 && resp.status < 300) {
+                    console.log(`[Send-COMM] ✓ Successfully sent ${batch.length} events. Status: ${resp.status}`);
+                    onOk(resp);
+                } else {
+                    console.error(`[Send-COMM] ✗ Send failed. Status: ${resp.status}, Response: ${resp.responseText}`);
+                    onErr(new Error(`HTTP ${resp.status}: ${resp.responseText}`));
+                }
             },
-            ontimeout: () => onErr(new Error('timeout')),
-            onerror: (e) => onErr(e)
+            ontimeout: () => {
+                console.error('[Send-COMM] ✗ Request timeout');
+                onErr(new Error('timeout'));
+            },
+            onerror: () => {
+                console.error('[Send-COMM] ✗ Network error');
+                onErr(new Error('network error'));
+            }
         });
     }
 
@@ -170,7 +188,11 @@
 
     function flushQueue() {
         const now = Date.now();
-        if (now < nextAllowedSendAt) return;
+        if (now < nextAllowedSendAt) {
+            const waitSec = Math.ceil((nextAllowedSendAt - now) / 1000);
+            console.log(`[Send-COMM] Waiting ${waitSec}s before next send attempt (backoff: ${backoffMs}ms)`);
+            return;
+        }
         if (isFlushing) return;
 
         const queue = getQueue();
@@ -186,15 +208,19 @@
                 const rest = queue.slice(batch.length);
                 setQueue(rest);
 
+                console.log(`[Send-COMM] Queue updated. Remaining: ${rest.length} events`);
+
                 backoffMs = BACKOFF_MIN_MS;
                 nextAllowedSendAt = 0;
                 isFlushing = false;
             },
             (err) => {
-                console.warn('[Send-COMM] send failed:', err);
+                console.warn('[Send-COMM] Send failed:', err.message);
 
                 nextAllowedSendAt = Date.now() + backoffMs;
                 backoffMs = Math.min(backoffMs * 2, BACKOFF_MAX_MS);
+
+                console.warn(`[Send-COMM] Backoff increased to ${backoffMs}ms. Next attempt in ${Math.ceil(backoffMs / 1000)}s`);
 
                 isFlushing = false;
             }
