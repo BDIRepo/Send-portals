@@ -4,7 +4,7 @@
 // @category       Info
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-comm.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-comm.user.js
-// @version        0.2.6
+// @version        0.2.7
 // @description    Send ALL COMM raw events ([guid, ts_ms, {plext}]) to local FastAPI via GM_xmlhttpRequest
 // @match          https://intel.ingress.com/*
 // @grant          GM_xmlhttpRequest
@@ -165,6 +165,32 @@
             onload: (resp) => {
                 if (resp.status >= 200 && resp.status < 300) {
                     console.log(`[Send-COMM] ✓ Successfully sent ${batch.length} events. Status: ${resp.status}`);
+
+                    // Wyświetl odpowiedź z API
+                    try {
+                        const responseData = JSON.parse(resp.responseText);
+                        console.log('[Send-COMM] API Response:', {
+                            accepted: responseData.accepted,
+                            already_present: responseData.already_present,
+                            inserted: responseData.inserted,
+                            rejected: responseData.rejected
+                        });
+
+                        // Szczegółowe informacje
+                        if (responseData.inserted > 0) {
+                            console.log(`[Send-COMM] ✓ Inserted: ${responseData.inserted} new records`);
+                        }
+                        if (responseData.already_present > 0) {
+                            console.log(`[Send-COMM] ⚠ Already present: ${responseData.already_present} duplicates`);
+                        }
+                        if (responseData.rejected > 0) {
+                            console.warn(`[Send-COMM] ✗ Rejected: ${responseData.rejected} events`);
+                        }
+                        console.log(`[Send-COMM] Summary: ${responseData.accepted}/${batch.length} accepted`);
+                    } catch (e) {
+                        console.log('[Send-COMM] Raw response:', resp.responseText);
+                    }
+
                     onOk(resp);
                 } else {
                     console.error(`[Send-COMM] ✗ Send failed. Status: ${resp.status}, Response: ${resp.responseText}`);
