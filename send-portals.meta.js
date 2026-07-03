@@ -2,7 +2,7 @@
 // @id             iitc-plugin-Send-portals
 // @name           IITC plugin: Send portals
 // @category       Info
-// @version        0.2.1
+// @version        0.2.2
 // @namespace      X
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-portals.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-portals.user.js
@@ -15,5 +15,7 @@
 // @include        http://*.ingress.com/mission/*
 // @match          https://*.ingress.com/mission/*
 // @match          http://*.ingress.com/mission/*
-// @grant          none
+// @grant          GM_xmlhttpRequest
+// @connect        127.0.0.1
+// @connect        localhost
 // ==/UserScript==

@@ -2,7 +2,7 @@
 // @id             iitc-plugin-Send-portals
 // @name           IITC plugin: Send portals
 // @category       Info
-// @version        0.2.1
+// @version        0.2.2
 // @namespace      X
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-portals.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-portals.user.js
@@ -15,9 +15,54 @@
 // @include        http://*.ingress.com/mission/*
 // @match          https://*.ingress.com/mission/*
 // @match          http://*.ingress.com/mission/*
-// @grant          none
+// @grant          GM_xmlhttpRequest
+// @connect        127.0.0.1
+// @connect        localhost
 // ==/UserScript==
 
+const SEND_PORTALS_API_URL = 'http://127.0.0.1:5000/api/v1.0/portals';
+const SEND_PORTALS_EVENT = 'send-portals:post';
+
+function sendPortalsPayload(payload) {
+    const body = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+    if (typeof GM_xmlhttpRequest === 'function') {
+        GM_xmlhttpRequest({
+            method: 'POST',
+            url: SEND_PORTALS_API_URL,
+            data: body,
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            timeout: 15000,
+            onload: function(resp) {
+                console.log('[Send Portals] API response:', resp.status, resp.responseText);
+            },
+            onerror: function(resp) {
+                console.error('[Send Portals] API request failed:', resp);
+            },
+            ontimeout: function() {
+                console.error('[Send Portals] API request timed out:', SEND_PORTALS_API_URL);
+            }
+        });
+    } else {
+        fetch(SEND_PORTALS_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: body
+        }).then(function(resp) {
+            console.log('[Send Portals] API response:', resp.status);
+        }).catch(function(err) {
+            console.error('[Send Portals] API request failed:', err);
+        });
+    }
+}
+
+document.addEventListener(SEND_PORTALS_EVENT, function(event) {
+    sendPortalsPayload(event.detail);
+});
 
 function wrapper(plugin_info) {
 // ensure plugin framework is there, even if iitc is not yet loaded
@@ -71,11 +116,9 @@ function wrapper(plugin_info) {
         var test = JSON.stringify(zz)
         console.log(test)
         if (jportals.length > 0) {
-            yourUrl = 'https://swagbox.pl/api/portals';
-            var xhr = new XMLHttpRequest();
-            xhr.open("POST", yourUrl, true);
-            xhr.setRequestHeader('Content-Type', 'application/json');
-            xhr.send(JSON.stringify(zz));
+            document.dispatchEvent(new CustomEvent(plugin_info.sendEvent, {
+                detail: JSON.stringify(zz)
+            }));
         } else { console.log("brak portali")}
 
 
@@ -116,7 +159,9 @@ function wrapper(plugin_info) {
 } // wrapper end
 // inject code into site context
 var script = document.createElement('script');
-var info = {};
+var info = {
+    sendEvent: SEND_PORTALS_EVENT
+};
 if (typeof GM_info !== 'undefined' && GM_info && GM_info.script) info.script = { version: GM_info.script.version, name: GM_info.script.name, description: GM_info.script.description };
 script.appendChild(document.createTextNode('('+ wrapper +')('+JSON.stringify(info)+');'));
 (document.body || document.head || document.documentElement).appendChild(script);
