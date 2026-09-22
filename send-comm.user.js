@@ -4,324 +4,420 @@
 // @category       Info
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-comm.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-comm.user.js
-// @version        0.2.8
-// @description    Send ALL COMM raw events ([guid, ts_ms, {plext}]) to local FastAPI via GM_xmlhttpRequest
+// @version        0.2.10
+// @description    Send received COMM raw events ([guid, ts_ms, {plext}]) to FastAPI
 // @match          https://intel.ingress.com/*
 // @grant          GM_xmlhttpRequest
+// @grant          GM_getValue
+// @grant          GM_setValue
+// @grant          GM_registerMenuCommand
 // @grant          unsafeWindow
 // @connect        srv42.mikr.us
+// @noframes
 // ==/UserScript==
 
 (() => {
     'use strict';
 
-    // =========================
-    // LOCAL CONFIG
-    // =========================
     const API_URL = 'http://srv42.mikr.us:20214/gamestat/ingress/comm/batch-raw';
-    const API_TOKEN = '6e66a1835cf948b4d3d8b0867ec5bc863945a88b660fa4591596226eb3d19b6b';
-
+    const TOKEN_KEY = 'send_comm_api_token';
     const BATCH_SIZE = 100;
     const FLUSH_INTERVAL_MS = 3000;
-
-    const MAX_QUEUE = 5000;
+    const QUEUE_WARNING_SIZE = 5000;
     const MAX_SEEN = 10000;
-
     const BACKOFF_MIN_MS = 3000;
     const BACKOFF_MAX_MS = 60000;
-
-    // =========================
-    // STORAGE KEYS
-    // =========================
     const LS_QUEUE = 'iitc_comm_exporter_queue_local_v3';
-    const LS_SEEN  = 'iitc_comm_exporter_seen_local_v3';
+    const LS_SEEN = 'iitc_comm_exporter_seen_local_v3';
+    const QUEUE_LOCK = 'iitc_comm_exporter_queue';
 
-    // =========================
-    // HELPERS: localStorage
-    // =========================
-    const loadLS = (key, fallback) => {
-        try {
-            const v = localStorage.getItem(key);
-            if (!v) return fallback;
-            return JSON.parse(v);
-        } catch {
-            return fallback;
-        }
-    };
-
-    const saveLS = (key, value) => {
-        try {
-            localStorage.setItem(key, JSON.stringify(value));
-        } catch {
-            // ignore
-        }
-    };
-
-    const getQueue = () => loadLS(LS_QUEUE, []);
-    const setQueue = (q) => {
-        if (q.length > MAX_QUEUE) q = q.slice(q.length - MAX_QUEUE);
-        saveLS(LS_QUEUE, q);
-    };
-
-    const getSeen = () => loadLS(LS_SEEN, []);
-    const setSeen = (arr) => {
-        if (arr.length > MAX_SEEN) arr = arr.slice(arr.length - MAX_SEEN);
-        saveLS(LS_SEEN, arr);
-    };
-
-    const seenHas = (guid) => getSeen().indexOf(guid) !== -1;
-    const seenAdd = (guid) => {
-        const s = getSeen();
-        if (s.indexOf(guid) === -1) {
-            s.push(guid);
-            setSeen(s);
-        }
-    };
-
-    // =========================
-    // NORMALIZE: [guid, ts_ms, {plext:{...}}]
-    // =========================
-    function normalizeToRawTriple(item) {
-        // already raw triple
-        if (Array.isArray(item) && item.length === 3) {
-            const [guid, ts, payload] = item;
-            if (
-                typeof guid === 'string' &&
-                typeof ts === 'number' &&
-                payload && typeof payload === 'object' &&
-                payload.plext && typeof payload.plext === 'object'
-            ) {
-                return [guid, ts, payload];
-            }
-        }
-
-        // object form (depends on IITC build)
-        if (item && typeof item === 'object') {
-            const guid = item.guid || item.id;
-            const ts = item.time || item.timestamp || item.ts;
-            let plext = null;
-
-            if (item.plext) plext = item.plext;
-            else if (item.data && item.data.plext) plext = item.data.plext;
-
-            if (typeof guid === 'string' && typeof ts === 'number' && plext && typeof plext === 'object') {
-                return [guid, ts, { plext }];
-            }
-        }
-
-        return null;
-    }
-
-    // =========================
-    // QUEUE
-    // =========================
-    function enqueueRawEvents(candidates) {
-        if (!candidates || !candidates.length) return;
-
-        const queue = getQueue();
-        let newCount = 0;
-
-        for (const cand of candidates) {
-            const raw = normalizeToRawTriple(cand);
-            if (!raw) continue;
-
-            const guid = raw[0];
-            if (!guid) continue;
-            if (seenHas(guid)) continue;
-
-            queue.push(raw);
-            seenAdd(guid);
-            newCount++;
-        }
-
-        setQueue(queue);
-
-        if (newCount > 0) {
-            console.log(`[Send-COMM] Enqueued ${newCount} new events. Queue size: ${queue.length}`);
-        }
-    }
-
-    // =========================
-    // SEND via GM_xmlhttpRequest
-    // =========================
-    function postBatchRaw(batch, onOk, onErr) {
-        const payload = {
-            source: 'IITC',
-            collected_at: new Date().toISOString(),
-            result: batch
-        };
-
-        console.log(`[Send-COMM] Sending batch of ${batch.length} events to ${API_URL}`);
-
-        GM_xmlhttpRequest({
-            method: 'POST',
-            url: API_URL,
-            data: JSON.stringify(payload),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${API_TOKEN}`
-            },
-            timeout: 15000,
-            onload: (resp) => {
-                if (resp.status >= 200 && resp.status < 300) {
-                    console.log(`[Send-COMM] ✓ Successfully sent ${batch.length} events. Status: ${resp.status}`);
-
-                    // Wyświetl odpowiedź z API
-                    try {
-                        const responseData = JSON.parse(resp.responseText);
-                        console.log('[Send-COMM] API Response:', {
-                            accepted: responseData.accepted,
-                            already_present: responseData.already_present,
-                            inserted: responseData.inserted,
-                            rejected: responseData.rejected
-                        });
-
-                        // Szczegółowe informacje
-                        if (responseData.inserted > 0) {
-                            console.log(`[Send-COMM] ✓ Inserted: ${responseData.inserted} new records`);
-                        }
-                        if (responseData.already_present > 0) {
-                            console.log(`[Send-COMM] ⚠ Already present: ${responseData.already_present} duplicates`);
-                        }
-                        if (responseData.rejected > 0) {
-                            console.warn(`[Send-COMM] ✗ Rejected: ${responseData.rejected} events`);
-
-                            // Szczegóły odrzuconych zdarzeń
-                            if (responseData.rejected_by_reason) {
-                                const reasons = [];
-                                for (const [reason, count] of Object.entries(responseData.rejected_by_reason)) {
-                                    if (count > 0) {
-                                        reasons.push(`${reason}: ${count}`);
-                                    }
-                                }
-                                if (reasons.length > 0) {
-                                    console.warn('[Send-COMM] Rejection reasons:');
-                                    reasons.forEach(r => console.warn(`  - ${r}`));
-                                }
-                            }
-                        }
-                        console.log(`[Send-COMM] Summary: ${responseData.accepted}/${batch.length} accepted`);
-                    } catch (e) {
-                        console.log('[Send-COMM] Raw response:', resp.responseText);
-                    }
-
-                    onOk(resp);
-                } else {
-                    console.error(`[Send-COMM] ✗ Send failed. Status: ${resp.status}, Response: ${resp.responseText}`);
-                    onErr(new Error(`HTTP ${resp.status}: ${resp.responseText}`));
-                }
-            },
-            ontimeout: () => {
-                console.error('[Send-COMM] ✗ Request timeout');
-                onErr(new Error('timeout'));
-            },
-            onerror: () => {
-                console.error('[Send-COMM] ✗ Network error');
-                onErr(new Error('network error'));
-            }
-        });
-    }
-
+    const pending = new Map();
+    let queueWarningShown = false;
     let isFlushing = false;
     let backoffMs = BACKOFF_MIN_MS;
     let nextAllowedSendAt = 0;
+    let started = false;
+    const stats = {
+        since: Date.now(), attempts: 0, sent: 0, responses: 0,
+        accepted: 0, inserted: 0, already_present: 0, rejected: 0,
+        errors: 0, lastResponse: 0, lastError: ''
+    };
+    let statsView = null;
+    let statsDialog = null;
+    let statsTimer = null;
 
-    function flushQueue() {
-        const now = Date.now();
-        if (now < nextAllowedSendAt) {
-            const waitSec = Math.ceil((nextAllowedSendAt - now) / 1000);
-            console.log(`[Send-COMM] Waiting ${waitSec}s before next send attempt (backoff: ${backoffMs}ms)`);
-            return;
+    function renderStats() {
+        if (!statsView) return;
+        let queueSize = '?';
+        let memorySize = pending.size;
+        try {
+            const guids = new Set(getQueue().map(item => item[0]));
+            memorySize = [...pending.keys()].filter(guid => !guids.has(guid)).length;
+            queueSize = guids.size + memorySize;
+        } catch {
+            // An unreadable queue must not be displayed as empty.
         }
-        if (isFlushing) return;
-
-        const queue = getQueue();
-        if (!queue.length) return;
-
-        isFlushing = true;
-
-        const batch = queue.slice(0, BATCH_SIZE);
-
-        postBatchRaw(
-            batch,
-            () => {
-                const rest = queue.slice(batch.length);
-                setQueue(rest);
-
-                console.log(`[Send-COMM] Queue updated. Remaining: ${rest.length} events`);
-
-                backoffMs = BACKOFF_MIN_MS;
-                nextAllowedSendAt = 0;
-                isFlushing = false;
-            },
-            (err) => {
-                console.warn('[Send-COMM] Send failed:', err.message);
-
-                nextAllowedSendAt = Date.now() + backoffMs;
-                backoffMs = Math.min(backoffMs * 2, BACKOFF_MAX_MS);
-
-                console.warn(`[Send-COMM] Backoff increased to ${backoffMs}ms. Next attempt in ${Math.ceil(backoffMs / 1000)}s`);
-
-                isFlushing = false;
-            }
-        );
+        const token = GM_getValue(TOKEN_KEY, '');
+        const wait = Math.max(0, Math.ceil((nextAllowedSendAt - Date.now()) / 1000));
+        const status = isFlushing ? 'Wysyłanie' :
+            typeof token !== 'string' || !token.trim() ? 'Brak tokenu API' :
+            wait ? 'Ponowienie za ' + wait + ' s' :
+            queueSize === '?' ? 'Błąd odczytu kolejki' :
+            queueSize ? 'Oczekiwanie na wysyłkę' : 'Kolejka pusta';
+        const values = {
+            ...stats,
+            since: new Date(stats.since).toLocaleString('pl-PL'),
+            queue: queueSize, memory: memorySize, status,
+            lastResponse: stats.lastResponse ? new Date(stats.lastResponse).toLocaleString('pl-PL') : 'Brak',
+            lastError: stats.lastError || 'Brak'
+        };
+        for (const [key, value] of Object.entries(values)) {
+            const cell = statsView.querySelector('[data-stat="' + key + '"]');
+            if (cell) cell.textContent = typeof value === 'number' ? value.toLocaleString('pl-PL') : value;
+        }
     }
 
-    // =========================
-    // IITC HOOKS
-    // =========================
+    function showStats() {
+        const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+        if (statsDialog) {
+            statsDialog.dialog('open');
+            statsDialog.dialog('moveToTop');
+            renderStats();
+            return;
+        }
+        const view = document.createElement('div');
+        view.style.cssText = 'font-size:13px;line-height:1.5;letter-spacing:0;overflow-wrap:anywhere';
+        const groups = [
+            ['Bieżący stan', [['status', 'Status'], ['queue', 'W kolejce'], ['memory', 'Tylko w pamięci karty']]],
+            ['Sumy tej karty (z ponowieniami)', [['since', 'Od uruchomienia'], ['attempts', 'Próby wysyłki paczek'], ['sent', 'Wysłane rekordy'], ['errors', 'Błędy cyklu wysyłki']]],
+            ['Sumy odpowiedzi API', [['responses', 'Odpowiedzi JSON (2xx)'], ['accepted', 'Zaakceptowane'], ['inserted', 'Nowe w bazie'], ['already_present', 'Już obecne w bazie'], ['rejected', 'Odrzucone']]],
+            ['Ostatnia aktywność', [['lastResponse', 'Odpowiedź API'], ['lastError', 'Ostatni błąd']]]
+        ];
+        for (const [title, rows] of groups) {
+            const table = document.createElement('table');
+            table.style.cssText = 'width:100%;table-layout:fixed;border-collapse:collapse;margin-bottom:10px';
+            const caption = document.createElement('caption');
+            caption.textContent = title;
+            caption.style.cssText = 'text-align:left;font-weight:bold;padding:4px 0;border-bottom:1px solid currentColor';
+            table.appendChild(caption);
+            for (const [key, label] of rows) {
+                const row = document.createElement('tr');
+                const heading = document.createElement('th');
+                heading.scope = 'row';
+                heading.textContent = label;
+                heading.style.cssText = 'width:58%;text-align:left;font-weight:normal;vertical-align:top;padding:3px 8px 3px 0';
+                const value = document.createElement('td');
+                value.dataset.stat = key;
+                value.style.cssText = 'text-align:right;vertical-align:top;padding:3px 0;font-variant-numeric:tabular-nums';
+                row.appendChild(heading);
+                row.appendChild(value);
+                table.appendChild(row);
+            }
+            view.appendChild(table);
+        }
+        statsDialog = w.dialog({
+            id: 'send-comm-stats', title: 'Send COMM: statystyki', html: view,
+            width: Math.min(420, Math.max(240, window.innerWidth - 32)),
+            height: 'auto',
+            closeCallback: () => {
+                clearInterval(statsTimer);
+                statsTimer = null;
+                statsView = null;
+                statsDialog = null;
+            }
+        });
+        statsView = view;
+        renderStats();
+        statsTimer = setInterval(renderStats, 1000);
+    }
+
+    function setupStats(w) {
+        GM_registerMenuCommand('Send COMM: statystyki', showStats);
+        if (w.IITC?.toolbox?.addButton) {
+            w.IITC.toolbox.addButton({ id: 'send-comm-stats', label: 'COMM: statystyki', action: showStats });
+        } else {
+            const toolbox = document.getElementById('toolbox');
+            if (toolbox) {
+                const link = document.createElement('a');
+                link.href = '#';
+                link.textContent = 'COMM: statystyki';
+                link.addEventListener('click', event => {
+                    event.preventDefault();
+                    showStats();
+                });
+                toolbox.appendChild(link);
+            }
+        }
+    }
+
+    function recordApiStats(result, batchSize) {
+        stats.responses++;
+        stats.lastResponse = Date.now();
+        // These are sums of API replies, including replies to retried events.
+        for (const key of ['accepted', 'inserted', 'already_present', 'rejected']) {
+            const count = result?.[key];
+            if (Number.isSafeInteger(count) && count >= 0 && count <= batchSize) stats[key] += count;
+        }
+        renderStats();
+    }
+
+    function readArray(key) {
+        const stored = localStorage.getItem(key);
+        const value = stored === null ? [] : JSON.parse(stored);
+        if (!Array.isArray(value)) throw new Error('Invalid stored array: ' + key);
+        return value;
+    }
+
+    function getQueue() {
+        const queue = readArray(LS_QUEUE);
+        if (queue.some(item => !normalizeToRawTriple(item))) {
+            throw new Error('Invalid stored queue; original data has been preserved');
+        }
+        return queue.map(normalizeToRawTriple);
+    }
+
+    function setQueue(queue) {
+        localStorage.setItem(LS_QUEUE, JSON.stringify(queue));
+        if (queue.length > QUEUE_WARNING_SIZE && !queueWarningShown) {
+            console.warn('[Send-COMM] Queue exceeds ' + QUEUE_WARNING_SIZE + ' events; no events were discarded');
+        }
+        queueWarningShown = queue.length > QUEUE_WARNING_SIZE;
+    }
+
+    function getSeen() {
+        const seen = readArray(LS_SEEN);
+        if (seen.some(guid => typeof guid !== 'string')) throw new Error('Invalid stored GUID list');
+        return new Set(seen);
+    }
+
+    function rememberConfirmed(batch) {
+        const seen = getSeen();
+        for (const [guid] of batch) {
+            seen.delete(guid);
+            seen.add(guid);
+        }
+        localStorage.setItem(LS_SEEN, JSON.stringify([...seen].slice(-MAX_SEEN)));
+    }
+
+    function withQueueLock(operation) {
+        if (typeof navigator !== 'undefined' && navigator.locks) {
+            return navigator.locks.request(QUEUE_LOCK, operation);
+        }
+        return Promise.resolve().then(operation);
+    }
+
+    function normalizeToRawTriple(item) {
+        let guid;
+        let ts;
+        let payload;
+        if (Array.isArray(item) && item.length === 3) {
+            [guid, ts, payload] = item;
+        } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+            guid = item.guid || item.id;
+            ts = item.time ?? item.timestamp ?? item.ts;
+            payload = { plext: item.plext ?? item.data?.plext };
+        }
+        if (
+            typeof guid === 'string' && guid.length > 0 &&
+            Number.isSafeInteger(ts) && ts >= 0 &&
+            payload && typeof payload === 'object' && !Array.isArray(payload) &&
+            payload.plext && typeof payload.plext === 'object' && !Array.isArray(payload.plext)
+        ) {
+            return [guid, ts, payload];
+        }
+        return null;
+    }
+
+    // Called under QUEUE_LOCK. Failed writes leave incoming events in memory for retry.
+    function collectQueue() {
+        const queue = getQueue();
+        if (!pending.size) return queue;
+        const queued = new Set(queue.map(item => item[0]));
+        const seen = getSeen();
+        let added = 0;
+        for (const [guid, raw] of pending) {
+            if (queued.has(guid) || seen.has(guid)) {
+                pending.delete(guid);
+                continue;
+            }
+            queue.push(raw);
+            queued.add(guid);
+            added++;
+        }
+        if (added) {
+            try {
+                setQueue(queue);
+                pending.clear();
+                console.log('[Send-COMM] Enqueued ' + added + ' events. Queue size: ' + queue.length);
+            } catch (err) {
+                console.error('[Send-COMM] Queue write failed. ' + pending.size + ' events remain only in this tab; keep it open.', err);
+            }
+        }
+        return queue;
+    }
+
+    async function enqueueRawEvents(candidates) {
+        for (const candidate of candidates) {
+            const raw = normalizeToRawTriple(candidate);
+            if (raw) pending.set(raw[0], raw);
+        }
+        try {
+            await withQueueLock(collectQueue);
+        } catch (err) {
+            console.error('[Send-COMM] Queue unavailable; incoming events remain in this tab. Keep it open.', err);
+        } finally {
+            renderStats();
+        }
+    }
+
+    function postBatchRaw(batch, token) {
+        return new Promise((resolve, reject) => {
+            let finished = false;
+            const fail = err => {
+                if (finished) return;
+                finished = true;
+                reject(err);
+            };
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: API_URL,
+                data: JSON.stringify({
+                    source: 'IITC',
+                    collected_at: new Date().toISOString(),
+                    result: batch
+                }),
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                },
+                timeout: 15000,
+                onload: resp => {
+                    if (finished) return;
+                    if (resp.status < 200 || resp.status >= 300) {
+                        fail(new Error('HTTP ' + resp.status));
+                        return;
+                    }
+                    try {
+                        const result = JSON.parse(resp.responseText);
+                        console.log('[Send-COMM] API response:', result);
+                        recordApiStats(result, batch.length);
+                        // Aggregate counts cannot identify individual rejected GUIDs.
+                        if (!result || result.accepted !== batch.length || result.rejected !== 0) {
+                            throw new Error('API did not confirm the whole batch; all events retained for retry');
+                        }
+                        finished = true;
+                        resolve(result);
+                    } catch (err) {
+                        fail(err);
+                    }
+                },
+                ontimeout: () => fail(new Error('Request timeout')),
+                onerror: () => fail(new Error('Network error')),
+                onabort: () => fail(new Error('Request aborted'))
+            });
+        });
+    }
+
+    async function flushQueue() {
+        if (isFlushing || Date.now() < nextAllowedSendAt) return;
+        isFlushing = true;
+        try {
+            const queue = await withQueueLock(collectQueue);
+            if (!queue.length) return;
+            const token = GM_getValue(TOKEN_KEY, '');
+            if (typeof token !== 'string' || !token.trim()) return;
+            const batch = queue.slice(0, BATCH_SIZE);
+            stats.attempts++;
+            stats.sent += batch.length;
+            renderStats();
+            console.log('[Send-COMM] Sending ' + batch.length + ' events');
+            await postBatchRaw(batch, token.trim());
+
+            await withQueueLock(() => {
+                const confirmed = new Set(batch.map(item => item[0]));
+                const rest = getQueue().filter(item => !confirmed.has(item[0]));
+                setQueue(rest);
+                for (const guid of confirmed) pending.delete(guid);
+                // If this write fails, a duplicate is possible, but no unsent event is lost.
+                try {
+                    rememberConfirmed(batch);
+                } catch (err) {
+                    console.warn('[Send-COMM] Could not persist confirmed GUIDs; duplicates may be retried', err);
+                }
+                console.log('[Send-COMM] Confirmed ' + batch.length + ' events. Remaining: ' + (rest.length + pending.size));
+            });
+            backoffMs = BACKOFF_MIN_MS;
+            nextAllowedSendAt = 0;
+        } catch (err) {
+            stats.errors++;
+            stats.lastError = err.message;
+            const delay = backoffMs;
+            nextAllowedSendAt = Date.now() + delay;
+            backoffMs = Math.min(delay * 2, BACKOFF_MAX_MS);
+            console.warn('[Send-COMM] ' + err.message + '. Next attempt in ' + delay / 1000 + 's');
+        } finally {
+            isFlushing = false;
+            renderStats();
+        }
+    }
+
     function handleChatHook(data) {
-        const candidates = [];
         if (!data) return;
-
+        const candidates = [];
         if (Array.isArray(data)) candidates.push(...data);
-        if (data.raw && Array.isArray(data.raw)) candidates.push(...data.raw);
-        if (data.result && Array.isArray(data.result)) candidates.push(...data.result);
-
-        enqueueRawEvents(candidates);
+        if (Array.isArray(data.raw)) candidates.push(...data.raw);
+        if (Array.isArray(data.result)) candidates.push(...data.result);
+        return enqueueRawEvents(candidates);
     }
 
     function setup() {
-        const w = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+        if (started) return;
+        const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+        if (typeof w.addHook !== 'function') return;
+        started = true;
 
-        if (!w.addHook) {
-            console.warn('[Send-COMM] IITC addHook not available yet');
-            return;
+        GM_registerMenuCommand('Send COMM: ustaw token API', () => {
+            const token = window.prompt('Token API dla Send COMM:');
+            if (token === null) return;
+            try {
+                GM_setValue(TOKEN_KEY, token.trim());
+                nextAllowedSendAt = 0;
+                backoffMs = BACKOFF_MIN_MS;
+                void flushQueue();
+            } catch (err) {
+                console.error('[Send-COMM] Could not save API token', err);
+            }
+        });
+        if (!GM_getValue(TOKEN_KEY, '')) {
+            console.warn('[Send-COMM] Set the API token using the userscript menu. Events will be queued until then.');
         }
-
-        console.log('[Send-COMM] STARTED. API:', API_URL);
+        if (API_URL.startsWith('http:')) {
+            console.warn('[Send-COMM] API uses unencrypted HTTP. Configure HTTPS on the server before changing API_URL.');
+        }
+        if (typeof navigator === 'undefined' || !navigator.locks) {
+            console.warn('[Send-COMM] Web Locks unavailable; use only one IITC tab to avoid concurrent queue writes.');
+        }
 
         const hooks = [
             'publicChatDataAvailable',
             'factionChatDataAvailable',
             'alertsChatDataAvailable',
-            'chatDataAvailable'
+            'commDataAvailable'
         ];
-
-        hooks.forEach((h) => w.addHook(h, handleChatHook));
-
+        hooks.forEach(hook => w.addHook(hook, handleChatHook));
         setInterval(flushQueue, FLUSH_INTERVAL_MS);
-
-        console.log('[Send-COMM] hooks attached:', hooks.join(', '));
+        setupStats(w);
+        console.log('[Send-COMM] Started. Hooks:', hooks.join(', '));
     }
 
-    // czekamy na iitcLoaded w kontekście IITC
     (function bootstrap() {
-        const w = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
-
+        const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
         if (w.iitcLoaded) {
             setup();
-            return;
-        }
-
-        // jeśli IITC jeszcze się ładuje, podepnij się do hooka iitcLoaded
-        if (w.addHook) {
+        } else if (typeof w.addHook === 'function') {
             w.addHook('iitcLoaded', setup);
-            return;
+        } else {
+            setTimeout(bootstrap, 1000);
         }
-
-        // fallback: spróbuj za chwilę
-        setTimeout(bootstrap, 1000);
     })();
-
 })();
