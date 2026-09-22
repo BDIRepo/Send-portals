@@ -4,7 +4,7 @@
 // @category       Info
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-comm.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-comm.user.js
-// @version        0.2.11
+// @version        0.2.12
 // @description    Send received COMM raw events ([guid, ts_ms, {plext}]) to FastAPI
 // @match          https://intel.ingress.com/*
 // @grant          GM_xmlhttpRequest
@@ -203,7 +203,7 @@
         return new Set(seen);
     }
 
-    function rememberConfirmed(batch) {
+    function rememberProcessed(batch) {
         const seen = getSeen();
         for (const [guid] of batch) {
             seen.delete(guid);
@@ -283,6 +283,22 @@
         }
     }
 
+    function isBatchComplete(result, batchSize) {
+        if (!result ||
+            !Number.isSafeInteger(result.accepted) || result.accepted < 0 ||
+            !Number.isSafeInteger(result.rejected) || result.rejected < 0 ||
+            result.accepted + result.rejected !== batchSize) return false;
+        if (result.rejected === 0) return true;
+
+        const reasons = result.rejected_by_reason;
+        // No GUIDs are needed when every event has a final outcome.
+        return reasons && typeof reasons === 'object' && !Array.isArray(reasons) &&
+            reasons.portal_out_of_allowed_bounds === result.rejected &&
+            Object.entries(reasons).every(([reason, count]) =>
+                Number.isSafeInteger(count) && count >= 0 &&
+                (reason === 'portal_out_of_allowed_bounds' || count === 0));
+    }
+
     function postBatchRaw(batch, token) {
         return new Promise((resolve, reject) => {
             let finished = false;
@@ -314,9 +330,8 @@
                         const result = JSON.parse(resp.responseText);
                         console.log('[Send-COMM] API response:', result);
                         recordApiStats(result, batch.length);
-                        // Aggregate counts cannot identify individual rejected GUIDs.
-                        if (!result || result.accepted !== batch.length || result.rejected !== 0) {
-                            throw new Error('API did not confirm the whole batch; all events retained for retry');
+                        if (!isBatchComplete(result, batch.length)) {
+                            throw new Error('API left events without a final outcome; batch retained for retry');
                         }
                         finished = true;
                         resolve(result);
@@ -344,20 +359,21 @@
             stats.sent += batch.length;
             renderStats();
             console.log('[Send-COMM] Sending ' + batch.length + ' events');
-            await postBatchRaw(batch, token.trim());
+            const result = await postBatchRaw(batch, token.trim());
 
             await withQueueLock(() => {
-                const confirmed = new Set(batch.map(item => item[0]));
-                const rest = getQueue().filter(item => !confirmed.has(item[0]));
+                const processed = new Set(batch.map(item => item[0]));
+                const rest = getQueue().filter(item => !processed.has(item[0]));
                 setQueue(rest);
-                for (const guid of confirmed) pending.delete(guid);
+                for (const guid of processed) pending.delete(guid);
                 // If this write fails, a duplicate is possible, but no unsent event is lost.
                 try {
-                    rememberConfirmed(batch);
+                    rememberProcessed(batch);
                 } catch (err) {
-                    console.warn('[Send-COMM] Could not persist confirmed GUIDs; duplicates may be retried', err);
+                    console.warn('[Send-COMM] Could not persist processed GUIDs; duplicates may be retried', err);
                 }
-                console.log('[Send-COMM] Confirmed ' + batch.length + ' events. Remaining: ' + (rest.length + pending.size));
+                console.log('[Send-COMM] Completed batch: ' + result.accepted + ' accepted, ' + result.rejected +
+                    ' permanently rejected (outside allowed bounds). Remaining: ' + (rest.length + pending.size));
             });
             backoffMs = BACKOFF_MIN_MS;
             nextAllowedSendAt = 0;

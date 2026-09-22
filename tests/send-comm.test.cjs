@@ -185,6 +185,73 @@ test('retains a partially accepted batch', async () => {
     assert.equal(h.queue().length, 2);
 });
 
+test('completes the 72 accepted / 28 out-of-bounds batch and sends the next events', async () => {
+    const h = harness();
+    h.openStats();
+    const batch = Array.from({ length: 100 }, (_, i) => event('id-' + i));
+    await h.add(batch);
+    const sending = h.flush();
+    await settle();
+    await h.add([event('next')]);
+    h.respond({
+        accepted: 72, rejected: 28, inserted: 0, already_present: 72,
+        rejected_by_reason: { portal_out_of_allowed_bounds: 28 }
+    });
+    await sending;
+    assert.deepEqual(h.queue().map(row => row[0]), ['next']);
+    assert.equal(h.seen().length, 100);
+    assert.equal(h.stat('accepted'), '72');
+    assert.equal(h.stat('rejected'), '28');
+    assert.equal(h.stat('errors'), '0');
+    await h.add(batch);
+    assert.equal(h.queue().length, 1);
+    const next = h.flush();
+    await settle();
+    assert.equal(h.requests.length, 2);
+    assert.deepEqual(JSON.parse(h.requests[1].data).result, [event('next')]);
+    h.respond({ accepted: 1, rejected: 0 });
+    await next;
+    assert.deepEqual(h.queue(), []);
+});
+
+test('completes a batch entirely rejected as out of bounds', async () => {
+    const h = harness();
+    await h.add([event('outside')]);
+    const sending = h.flush();
+    await settle();
+    h.respond({
+        accepted: 0, rejected: 1,
+        rejected_by_reason: { portal_out_of_allowed_bounds: 1, other_reason: 0 }
+    });
+    await sending;
+    assert.deepEqual(h.queue(), []);
+    await h.add([event('outside')]);
+    assert.deepEqual(h.queue(), []);
+    await h.flush();
+    assert.equal(h.requests.length, 1);
+});
+
+for (const result of [
+    { accepted: 0, rejected: 2, rejected_by_reason: { portal_out_of_allowed_bounds: 1, temporary_error: 1 } },
+    { accepted: 1, rejected: 1, rejected_by_reason: { temporary_error: 1 } },
+    { accepted: 1, rejected: 1, rejected_by_reason: { portal_out_of_allowed_bounds: 0 } },
+    { accepted: 1, rejected: 1, rejected_by_reason: { portal_out_of_allowed_bounds: 1, temporary_error: 1 } },
+    { accepted: 1, rejected: 1, rejected_by_reason: { portal_out_of_allowed_bounds: '1' } },
+    { accepted: 0, rejected: 1, rejected_by_reason: { portal_out_of_allowed_bounds: 1 } },
+    { accepted: -1, rejected: 3, rejected_by_reason: { portal_out_of_allowed_bounds: 3 } }
+]) {
+    test('retains ambiguous or inconsistent rejection response: ' + JSON.stringify(result), async () => {
+        const h = harness();
+        await h.add([event('A'), event('B')]);
+        const sending = h.flush();
+        await settle();
+        h.respond(result);
+        await sending;
+        assert.equal(h.queue().length, 2);
+        assert.deepEqual(h.seen(), []);
+    });
+}
+
 test('retains HTTP 2xx responses containing invalid JSON', async () => {
     const h = harness();
     await h.add([event('A')]);
