@@ -4,7 +4,7 @@
 // @category       Info
 // @updateURL      https://github.com/BDIRepo/Send-portals/raw/master/send-comm.meta.js
 // @downloadURL    https://github.com/BDIRepo/Send-portals/raw/master/send-comm.user.js
-// @version        0.2.10
+// @version        0.2.11
 // @description    Send received COMM raw events ([guid, ts_ms, {plext}]) to FastAPI
 // @match          https://intel.ingress.com/*
 // @grant          GM_xmlhttpRequest
@@ -20,6 +20,7 @@
     'use strict';
 
     const API_URL = 'http://srv42.mikr.us:20214/gamestat/ingress/comm/batch-raw';
+    const DEFAULT_API_TOKEN = '6e66a1835cf948b4d3d8b0867ec5bc863945a88b660fa4591596226eb3d19b6b';
     const TOKEN_KEY = 'send_comm_api_token';
     const BATCH_SIZE = 100;
     const FLUSH_INTERVAL_MS = 3000;
@@ -45,6 +46,18 @@
     let statsView = null;
     let statsDialog = null;
     let statsTimer = null;
+    let sessionApiToken = null;
+
+    function getApiToken() {
+        if (sessionApiToken !== null) return sessionApiToken;
+        try {
+            const stored = GM_getValue(TOKEN_KEY, '');
+            if (typeof stored === 'string' && stored.trim()) return stored.trim();
+        } catch {
+            // The public default also works when userscript storage is unavailable.
+        }
+        return DEFAULT_API_TOKEN;
+    }
 
     function renderStats() {
         if (!statsView) return;
@@ -57,7 +70,7 @@
         } catch {
             // An unreadable queue must not be displayed as empty.
         }
-        const token = GM_getValue(TOKEN_KEY, '');
+        const token = getApiToken();
         const wait = Math.max(0, Math.ceil((nextAllowedSendAt - Date.now()) / 1000));
         const status = isFlushing ? 'Wysyłanie' :
             typeof token !== 'string' || !token.trim() ? 'Brak tokenu API' :
@@ -324,7 +337,7 @@
         try {
             const queue = await withQueueLock(collectQueue);
             if (!queue.length) return;
-            const token = GM_getValue(TOKEN_KEY, '');
+            const token = getApiToken();
             if (typeof token !== 'string' || !token.trim()) return;
             const batch = queue.slice(0, BATCH_SIZE);
             stats.attempts++;
@@ -376,21 +389,23 @@
         if (typeof w.addHook !== 'function') return;
         started = true;
 
-        GM_registerMenuCommand('Send COMM: ustaw token API', () => {
-            const token = window.prompt('Token API dla Send COMM:');
+        GM_registerMenuCommand('Send COMM: ustaw token API', async () => {
+            const token = window.prompt('Token API dla Send COMM (puste pole przywraca domyślny):', getApiToken());
             if (token === null) return;
+            sessionApiToken = token.trim() || DEFAULT_API_TOKEN;
+            nextAllowedSendAt = 0;
+            backoffMs = BACKOFF_MIN_MS;
+            renderStats();
             try {
-                GM_setValue(TOKEN_KEY, token.trim());
-                nextAllowedSendAt = 0;
-                backoffMs = BACKOFF_MIN_MS;
-                void flushQueue();
+                await GM_setValue(TOKEN_KEY, sessionApiToken);
             } catch (err) {
-                console.error('[Send-COMM] Could not save API token', err);
+                stats.lastError = 'Nie zapisano tokenu; zmiana działa tylko w tej karcie.';
+                console.error('[Send-COMM] Could not save API token; using it in this tab', err);
+            } finally {
+                renderStats();
+                void flushQueue();
             }
         });
-        if (!GM_getValue(TOKEN_KEY, '')) {
-            console.warn('[Send-COMM] Set the API token using the userscript menu. Events will be queued until then.');
-        }
         if (API_URL.startsWith('http:')) {
             console.warn('[Send-COMM] API uses unencrypted HTTP. Configure HTTPS on the server before changing API_URL.');
         }

@@ -8,6 +8,7 @@ const source = fs.readFileSync(path.join(__dirname, '../send-comm.user.js'), 'ut
 const QUEUE = 'iitc_comm_exporter_queue_local_v3';
 const SEEN = 'iitc_comm_exporter_seen_local_v3';
 const TOKEN = 'send_comm_api_token';
+const DEFAULT_TOKEN = '6e66a1835cf948b4d3d8b0867ec5bc863945a88b660fa4591596226eb3d19b6b';
 const event = guid => [guid, 1234567890, { plext: { text: 'test' } }];
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
@@ -57,7 +58,7 @@ function sharedStorage() {
     };
 }
 
-function harness({ shared = sharedStorage(), token = 'test-token', loaded = true, locks = true } = {}) {
+function harness({ shared = sharedStorage(), token = 'test-token', loaded = true, locks = true, getToken, setToken } = {}) {
     const hooks = new Map();
     const requests = [];
     const intervals = [];
@@ -103,8 +104,8 @@ function harness({ shared = sharedStorage(), token = 'test-token', loaded = true
         },
         clearInterval: callback => activeTimers.delete(callback),
         setTimeout: () => { throw new Error('Unexpected bootstrap retry'); },
-        GM_getValue: (key, fallback) => settings.get(key) ?? fallback,
-        GM_setValue: (key, value) => settings.set(key, value),
+        GM_getValue: getToken ?? ((key, fallback) => settings.get(key) ?? fallback),
+        GM_setValue: setToken ?? ((key, value) => settings.set(key, value)),
         GM_registerMenuCommand: (name, callback) => menus.set(name, callback),
         GM_xmlhttpRequest(request) {
             if (requestError) throw requestError;
@@ -321,17 +322,22 @@ test('retains batches of at most 100 and prevents overlapping sends in a tab', a
     assert.equal(h.queue().length, 1);
 });
 
-test('queues without credentials and saves a token through the menu', async () => {
+test('uses the public default and allows overriding it through the menu', async () => {
     const h = harness({ token: '' });
+    h.openStats();
+    assert.equal(h.stat('status'), 'Kolejka pusta');
     await h.add([event('A')]);
-    await h.flush();
-    assert.equal(h.requests.length, 0);
-    assert.equal(h.queue().length, 1);
+    const sending = h.flush();
+    await settle();
+    assert.equal(h.requests[0].headers.Authorization, 'Bearer ' + DEFAULT_TOKEN);
+    h.respond({ accepted: 1, rejected: 0 });
+    await sending;
+    await h.add([event('B')]);
     h.prompt('  configured-token  ');
-    h.menus.get('Send COMM: ustaw token API')();
+    await h.menus.get('Send COMM: ustaw token API')();
     await settle();
     assert.equal(h.settings.get(TOKEN), 'configured-token');
-    assert.equal(h.requests[0].headers.Authorization, 'Bearer configured-token');
+    assert.equal(h.requests[1].headers.Authorization, 'Bearer configured-token');
     h.respond({ accepted: 1, rejected: 0 });
     await settle();
     assert.deepEqual(h.queue(), []);
@@ -446,19 +452,78 @@ test('statistics update while closed and ignore repeated or late response callba
     assert.equal(h.stat('errors'), '1');
 });
 
-test('statistics show memory-only queue and missing credentials', async () => {
+test('statistics show memory-only queue while using default credentials', async () => {
     const h = harness({ token: '' });
     h.openStats();
-    assert.equal(h.stat('status'), 'Brak tokenu API');
+    assert.equal(h.stat('status'), 'Kolejka pusta');
     h.shared.failures.add(QUEUE);
     await h.add([event('A')]);
     assert.equal(h.stat('queue'), '1');
     assert.equal(h.stat('memory'), '1');
     h.shared.failures.delete(QUEUE);
-    await h.flush();
+    const sending = h.flush();
+    await settle();
     assert.equal(h.stat('queue'), '1');
     assert.equal(h.stat('memory'), '0');
-    assert.equal(h.stat('attempts'), '0');
+    assert.equal(h.stat('attempts'), '1');
+    h.respond({ accepted: 1, rejected: 0 });
+    await sending;
+});
+
+for (const token of [null, '', '   ', 123]) {
+    test('falls back to public token for missing or invalid setting: ' + JSON.stringify(token), async () => {
+        const h = harness({ token });
+        h.openStats();
+        await h.add([event('A')]);
+        const sending = h.flush();
+        await settle();
+        assert.equal(h.requests[0].headers.Authorization, 'Bearer ' + DEFAULT_TOKEN);
+        h.respond({ accepted: 1, rejected: 0 });
+        await sending;
+        assert.equal(h.stat('status'), 'Kolejka pusta');
+    });
+}
+
+test('uses default credentials when reading settings throws', async () => {
+    const h = harness({ getToken() { throw new Error('Storage unavailable'); } });
+    h.openStats();
+    await h.add([event('A')]);
+    const sending = h.flush();
+    await settle();
+    assert.equal(h.requests[0].headers.Authorization, 'Bearer ' + DEFAULT_TOKEN);
+    h.respond({ accepted: 1, rejected: 0 });
+    await sending;
+    assert.equal(h.stat('status'), 'Kolejka pusta');
+});
+
+test('menu token is used immediately even if asynchronous persistence fails', async () => {
+    const h = harness({ setToken: async () => { throw new Error('Write failed'); } });
+    h.openStats();
+    await h.add([event('A')]);
+    h.prompt('  session-token  ');
+    await h.menus.get('Send COMM: ustaw token API')();
+    await settle();
+    assert.equal(h.requests[0].headers.Authorization, 'Bearer session-token');
+    assert.match(h.stat('lastError'), /tylko w tej karcie/);
+    h.respond({ accepted: 1, rejected: 0 });
+    await settle();
+    assert.equal(h.stat('status'), 'Kolejka pusta');
+});
+
+test('empty menu input restores the default while cancelling preserves the override', async () => {
+    const h = harness({ token: 'custom-token' });
+    await h.menus.get('Send COMM: ustaw token API')();
+    assert.equal(h.settings.get(TOKEN), 'custom-token');
+    h.prompt('   ');
+    await h.menus.get('Send COMM: ustaw token API')();
+    await settle();
+    assert.equal(h.settings.get(TOKEN), DEFAULT_TOKEN);
+    await h.add([event('A')]);
+    const sending = h.flush();
+    await settle();
+    assert.equal(h.requests[0].headers.Authorization, 'Bearer ' + DEFAULT_TOKEN);
+    h.respond({ accepted: 1, rejected: 0 });
+    await sending;
 });
 
 test('statistics remain finite when the API returns invalid counters', async () => {
